@@ -1,5 +1,5 @@
 from pyrogram import filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from pyrogram.errors import FloodWait
 from .storage import *
@@ -8,7 +8,6 @@ import asyncio
 from Tools.db import add_user 
 
 from bot import Bot, Vars
-import random
 
 from aioitertools.itertools import islice
 
@@ -49,14 +48,13 @@ async def episode_info_handler(_, query):
     
     animeclass = await webs.get_info(animeclass)
     await igrone_error(query.answer)()
-    
-    poster = animeclass.poster if animeclass.poster else random.choice(Vars.PICS)
 
     back_cache[f"{webs.sf}_{rdata}"] = back_data # donot change this
     episode_cache[rdata] = (animeclass, f"{webs.sf}_{rdata}")
+    
     try:
-      await  retry_on_flood(query.edit_message_media)(
-        InputMediaPhoto(poster, caption=animeclass.msg),
+      await retry_on_flood(query.edit_message_text)(
+        text=animeclass.msg[:4096],
         reply_markup=InlineKeyboardMarkup([
           [
             InlineKeyboardButton(" 𝗘𝗽𝗶𝘀𝗼𝗱𝗲 ", callback_data=f"et{rdata}"),
@@ -66,16 +64,7 @@ async def episode_info_handler(_, query):
             InlineKeyboardButton(" 𝗕𝗮𝗰𝗸 ", callback_data=f"ebk_{webs.sf}_{rdata}")
           ]]))
     except Exception:
-      await  retry_on_flood(query.edit_message_media)(
-        InputMediaPhoto(Vars.PICS[-1], caption=animeclass.msg),
-        reply_markup=InlineKeyboardMarkup([
-          [
-            InlineKeyboardButton(" 𝗘𝗽𝗶𝘀𝗼𝗱𝗲 ", callback_data=f"et{rdata}"),
-            InlineKeyboardButton(" 𝐂𝐥𝐨𝐬𝐞 ", callback_data="qclose")
-          ],
-          [
-            InlineKeyboardButton(" 𝗕𝗮𝗰𝗸 ", callback_data=f"ebk_{webs.sf}_{rdata}")
-          ]]))
+      pass
   else:
     await retry_on_flood(query.answer)(" This is an old button, please redo the search ", show_alert=True)
 
@@ -501,15 +490,4 @@ async def all_episode_download_handler(_, query):
 
 
 
-# ----- cancel task from queue -----
-@Bot.on_callback_query(filters.regex("^cancel_"))
-async def cancel_task_handler(_, query):
-  task_id = query.data.removeprefix("cancel_")
-  if Queue.task_exists(task_id):
-    await Queue.delete_task(task_id)
-    await igrone_error(query.answer)(" Task Cancelled ", show_alert=True)
-    await retry_on_flood(query.message.delete)()
-  else:
-    await igrone_error(query.answer)(" Task Not Found ", show_alert=True)
-    await retry_on_flood(query.message.delete)()
-
+# ----- ca
