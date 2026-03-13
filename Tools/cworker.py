@@ -1,252 +1,191 @@
 from TG.storage import Queue, igrone_error, retry_on_flood, get_quality_num
-
 from Tools.logger import get_logger
-from Tools.db import uts, ensure_user
-from Tools.Helpers import Downloader, progress_for_pyrogram, get_stream_duration, get_media_details
+from Tools.db import uts, ensure_user, track_message, messages
+from Tools.Helpers import Downloader, progress_for_pyrogram
 from bot import Bot, Vars
-from PIL import Image
 from time import time
 import os
 import asyncio
+from datetime import datetime, timedelta
 
 logger = get_logger(__name__)
 
+# Track if the background engine is running to prevent duplicates
+_delete_engine_running = False
+
 def get_random_folder_name(base_folder: str = "Downloads"):
-  while True:
-    folder_path = f"{base_folder}/{os.urandom(10).hex()}"
-    if not os.path.exists(folder_path):
-      return folder_path
+    while True:
+        folder_path = f"{base_folder}/{os.urandom(10).hex()}"
+        if not os.path.exists(folder_path):
+            return folder_path
 
+# ==========================================
+# BACKGROUND TASK: 6-HOUR AUTO-DELETE
+# ==========================================
+async def auto_delete_engine():
+    """Continuously checks the database for messages older than 6 hours and deletes them."""
+    global _delete_engine_running
+    if _delete_engine_running:
+        return
+    _delete_engine_running = True
+    
+    logger.info("6-Hour Auto-Delete Engine Started.")
+    while True:
+        try:
+            cutoff_time = datetime.utcnow() - timedelta(hours=6)
+            expired_messages = messages.find({"createdAt": {"$lte": cutoff_time}})
+            
+            for msg in expired_messages:
+                try:
+                    await Bot.delete_messages(chat_id=msg["chat_id"], message_ids=msg["message_id"])
+                    logger.info(f"Auto-Deleted message {msg['message_id']} from chat {msg['chat_id']}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete message {msg['message_id']}: {e}")
+                finally:
+                    messages.delete_one({"_id": msg["_id"]})
+                    
+        except Exception as e:
+            logger.error(f"Auto-Delete Engine Error: {e}")
+            
+        await asyncio.sleep(60)  # Check every 60 seconds
 
-async def episode_worker(woker_id):
-  while True:
-    try:
-      data, user_id, task_id = await Queue.get()
-      try:
-        await asyncio.sleep(6) # to make process quite slow
-        await episode_download_processer(data, user_id, task_id)
-        logger.info(f"Task {task_id} done by worker {woker_id}")
-      except Exception as err:
-        logger.exception(err)
-      finally:
-        await Queue.task_done(task_id)
-    except Exception as err:
-      logger.exception(err)
-
-
+async def episode_worker(worker_id):
+    # Boot up the Auto-Delete engine on the first worker
+    if worker_id == 0:
+        asyncio.create_task(auto_delete_engine())
+        
+    while True:
+        try:
+            data, user_id, task_id = await Queue.get()
+            try:
+                await episode_download_processer(data, user_id, task_id)
+                logger.info(f"Task {task_id} completed by worker {worker_id}")
+            except Exception as err:
+                logger.error(f"Worker {worker_id} error: {err}")
+            finally:
+                await Queue.task_done(task_id)
+        except Exception as err:
+            logger.error(f"Worker {worker_id} queue error: {err}")
+            await asyncio.sleep(2)
 
 def clean_name(txt, length=-1):
-  txt = txt.replace("_", "").replace("&", "").replace(";", "")
-  txt = txt.replace("None", "").replace(":", "").replace("'", "")
-  txt = txt.replace("|", "").replace("*", "").replace("?", "")
-  txt = txt.replace(">", "").replace("<", "").replace("`", "")
-  txt = txt.replace("!", "").replace("@", "").replace("#", "")
-  txt = txt.replace("$", "").replace("%", "").replace("^", "")
-  txt = txt.replace("~", "").replace("+", "").replace("=", "")
-  txt = txt.replace("/", "").replace("\\", "").replace("\n", "")
-  txt = txt.replace(".jpg", "")
-  
-  if length != -1:
-    txt = txt[:length]
-  
-  return txt
+    txt = txt.replace("_", " ").replace("&", "").replace(";", "")
+    txt = txt.replace("None", "").replace(":", "").replace("'", "")
+    txt = txt.replace("|", "").replace("*", "").replace("?", "")
+    txt = txt.replace(">", "").replace("<", "").replace("`", "")
+    txt = txt.replace("!", "").replace("@", "").replace("#", "")
+    txt = txt.replace("$", "").replace("%", "").replace("^", "")
+    txt = txt.replace("~", "").replace("+", "").replace("=", "")
+    txt = txt.replace("/", "").replace("\\", "").replace("\n", "")
+    txt = txt.replace(".jpg", "")
+    return txt[:length] if length != -1 else txt
 
 async def episode_download_processer(download_, user_id, task_id):
-  user_id = str(user_id)
-  await ensure_user(user_id)
+    user_id = str(user_id)
+    await ensure_user(user_id)
+    sts = download_.sts
 
-  sts = download_.sts
-
-  if not download_.download_link or download_.download_link.get('link', None) is None:
-    if sts:
-      await retry_on_flood(sts.edit_text)("<i> No download link found... </i>")
-    return
-
-  try:
-    file_name = uts[user_id]['setting'].get("file_name", None)
-    file_name_len = uts[user_id]['setting'].get("f_n_l", None)
-
-    file_name_len = int(file_name_len) if file_name_len else None
-    regex_ = uts[user_id]['setting'].get("regex", None)
-    quality_ = get_quality_num(download_.quality)
-    if regex_:
-      download_.title = str(download_.title).zfill(int(regex_))
-
-    if file_name:
-      file_name = str(file_name).replace("{name}", clean_name(download_.anime_title, file_name_len))
-
-      file_name = str(file_name).replace("{ep}", str(download_.title))
-      if quality_:
-        file_name = str(file_name).replace("{res}", str(quality_))
-      else:
-        file_name = str(file_name).replace("{res}", " ")
-
-      if download_.webs_data == "AP" and ('eng' in download_.download_link['quality']):
-        file_name = file_name.replace("{type}", "DUB")
-
-      elif download_.webs_data == "AP" and ('eng' not in download_.download_link['quality']):
-        file_name = file_name.replace("{type}", "SUB")
-
-      else:
-        file_name = file_name.replace("{type}", " ")
-    else:
-      file_name = f"{clean_name(download_.anime_title)} - {download_.title} - {get_quality_num(download_.quality) if download_.quality else ' '}.mp4"
-    
-    try:
-      await igrone_error(sts.edit_text)(
-        f"<b>Downloading {file_name}</b>\n\n<b>Task ID:</b> <code>{task_id}</code>\n<b>Link:</b> <code>{download_.download_link['link']}</code>"
-      ) if sts else None
-
-      
-      yt = Downloader(message=sts, file_name=file_name, folder=get_random_folder_name())
-      file_path = await yt.download(
-        download_.download_link['link'],
-        video_format=download_.download_link.get("video_format") if "video_format" in download_.download_link else ""
-      )
-      
-      if not file_path:
-        await yt.clean_folder()
+    if not download_.download_link or download_.download_link.get('link', None) is None:
+        if sts:
+            await retry_on_flood(sts.edit_text)("<code>Extraction failed. No high-speed link found.</code>")
         return
-      
-      await igrone_error(sts.edit_text)(
-          f"<b>Downloaded {file_name}</b>\n\n<b>File Path:</b> <code>{file_path}</code>"
-      ) if sts else None
 
-      if isinstance(file_path, list):
-        for file_path_ in file_path:
-          await send_media(file_path_, file_name, user_id, sts, download_.download_link['link'])
-      else:
-        await send_media(file_path, file_name, user_id, sts, download_.download_link['link'])
+    try:
+        quality_ = get_quality_num(download_.quality) or "High-Speed"
+        # 100% Branded Name
+        file_name = f"✲『SCANIME』✲ {clean_name(download_.anime_title)} - {download_.title} [{quality_}].mp4"
+        
+        if sts:
+            await igrone_error(sts.edit_text)(
+                f"<blockquote><b>⚡️ EXTRACTING HIGH-SPEED CDN ⚡️</b></blockquote>\n\n<b>Target:</b> <code>{file_name}</code>\n<b>Task ID:</b> <code>{task_id}</code>"
+            )
+        
+        yt = Downloader(message=sts, file_name=file_name, folder=get_random_folder_name())
+        file_path = await yt.download(
+            download_.download_link['link'],
+            video_format=download_.download_link.get("video_format", "")
+        )
+        
+        if not file_path:
+            await yt.clean_folder()
+            if sts:
+                await igrone_error(sts.edit_text)("<code>Download failed. Server rejected connection.</code>")
+            return
+            
+        if sts:
+            await igrone_error(sts.edit_text)("<code>Download complete. Initiating high-speed upload...</code>")
 
-      await retry_on_flood(sts.delete)() if sts else None
-
-      await yt.clean_folder()
-      if isinstance(file_path, list):
-        for file_path_ in file_path:
-          if os.path.exists(file_path_):
-            os.remove(file_path_)
-      else:
-        if os.path.exists(file_path):
-          os.remove(file_path)
-      try:
-        if os.path.exists(yt.folder):
-          os.rmdir(yt.folder)
-      except:
-        pass
+        if isinstance(file_path, list):
+            for fp in file_path:
+                await send_media(fp, file_name, user_id, sts, download_.download_link['link'])
+        else:
+            await send_media(file_path, file_name, user_id, sts, download_.download_link['link'])
 
     except Exception as err:
-      logger.exception(err)
-      await igrone_error(sts.edit_text)(f"<b>Error:</b> <code>{err}</code>") if sts else None
+        logger.exception(err)
+        if sts:
+            await igrone_error(sts.edit_text)(f"<code>System Error: {err}</code>")
+    finally:
+        # STRICT ZERO-DISK POLICY
+        if 'yt' in locals():
+            await yt.clean_folder()
+        if 'file_path' in locals():
+            paths = file_path if isinstance(file_path, list) else [file_path]
+            for p in paths:
+                if p and os.path.exists(p):
+                    try: os.remove(p)
+                    except: pass
+        
+        # Ensure the status message is tracked for deletion too
+        if sts:
+            await retry_on_flood(sts.edit_text)("<code>Task completed.</code>")
+            await track_message(sts.chat.id, sts.id)
 
-  except Exception as err:
-    logger.exception(err)
-    await igrone_error(sts.edit_text)(f"<b>Error:</b> <code>{err}</code>")  if sts else None
-
-
-
-async def send_media(
-  dl_location, new_filename,
-  user_id, sts,
-  link=None
-):
-
-  user_id = str(user_id)
-
-  caption = uts[user_id]['setting'].get('caption', None)
-  if caption:
-    caption = caption.replace("{}", new_filename)
-  else:
-    caption = f"<blockquote>{new_filename}</blockquote>"
-
-  thumb = uts[user_id]['setting'].get('thumb', None)
-  thumb_path = None
-
-  if thumb:
-    await igrone_error(sts.edit)("<blockquote>Adding Thumbnail....</blockquote>") if sts else None
-
-    thumb_path = await Bot.download_media(thumb)
-    Image.open(thumb_path).convert("RGB").save(thumb_path)
-    img = Image.open(thumb_path)
-    img.resize((320, 320))
-    img.save(thumb_path, "JPEG")
-
-  mode = uts[user_id]['setting'].get('mode', None)
-  new_filename = f"{new_filename}.mp4" if not new_filename.endswith(".mp4") or not new_filename.endswith(".mp4") else new_filename
-  
-  if not mode:
-    thumb_path, err = await get_stream_duration(dl_location) if not thumb_path else (thumb_path, None)
-    width, height, duration = await get_media_details(dl_location)
+async def send_media(dl_location, new_filename, user_id, sts, link=None):
+    user_id = str(user_id)
+    
+    # 100% Branded, Minimalist Caption (No credits)
+    caption = f"<blockquote><b>✲『SCANIME』✲ DIRECT DELIVERY</b></blockquote>\n\n<b>File:</b> <code>{new_filename}</code>\n<b>Status:</b> <i>File will self-destruct in 6 hours to protect the server.</i>"
+    
+    docs = None
     try:
-      docs = await retry_on_flood(Bot.send_video)(
-        chat_id=user_id,
-        video=dl_location,
-        caption=caption,
-        duration=duration,
-        width=width,
-        height=height,
-        supports_streaming=True,
-        file_name=new_filename,
-        progress=progress_for_pyrogram,
-        progress_args=("**Upload Started...**", sts, time()),
-        thumb=thumb_path,
-      )
-    except:
-      docs = await retry_on_flood(Bot.send_video)(
-        chat_id=user_id,
-        video=dl_location,
-        caption=caption,
-        supports_streaming=True,
-        file_name=new_filename,
-        progress=progress_for_pyrogram,
-        progress_args=("**Upload Started...**", sts, time()),
-        thumb=thumb_path,
-      )
-  else:
-    try:
-      docs = await Bot.send_document(
-        user_id,
-        document=dl_location,
-        caption=caption,
-        file_name=new_filename,
-        progress=progress_for_pyrogram,
-        progress_args=(f"**Upload Started {new_filename} ...**", sts, time()),
-        thumb=thumb_path
-      )
-    except:
-      docs = await Bot.send_document(
-        user_id,
-        document=dl_location,
-        caption=caption,
-        file_name=new_filename,
-        progress=progress_for_pyrogram,
-        progress_args=(f"**Upload Started {new_filename} ...**", sts, time()),
-        thumb=thumb_path
-      )
+        # We enforce Video streaming as the default premium experience
+        docs = await retry_on_flood(Bot.send_video)(
+            chat_id=int(user_id),
+            video=dl_location,
+            caption=caption,
+            supports_streaming=True,
+            file_name=new_filename,
+            progress=progress_for_pyrogram,
+            progress_args=("<b>⚡️ UPLOADING TO TELEGRAM...</b>", sts, time())
+        )
+    except Exception as e:
+        logger.warning(f"Video upload failed, falling back to document: {e}")
+        try:
+            docs = await retry_on_flood(Bot.send_document)(
+                chat_id=int(user_id),
+                document=dl_location,
+                caption=caption,
+                file_name=new_filename,
+                progress=progress_for_pyrogram,
+                progress_args=("<b>⚡️ UPLOADING DOCUMENT...</b>", sts, time())
+            )
+        except Exception as fallback_e:
+            logger.error(f"Fallback upload failed: {fallback_e}")
 
-  if dump_channel := uts[user_id]['setting'].get('dump', None):
-    try: await retry_on_flood(docs.copy)(int(dump_channel))
-    except: pass 
+    if docs:
+        # Track the video message for the 6-Hour Auto-Delete Engine
+        await track_message(docs.chat.id, docs.id)
 
-  user_info = await Bot.get_users(user_id)
-  caption = f"<blockquote>{new_filename}</blockquote>\n\n=> {user_info.mention()}\n=> <code>{user_id}</code>\n=> {link}"
+    # Simplified Logging
+    if Vars.LOG_CHANNEL != 0:
+        log_caption = f"<blockquote><b>✲『SCANIME』✲ DELIVERY LOG</b></blockquote>\n\n<b>User:</b> <code>{user_id}</code>\n<b>File:</b> <code>{new_filename}</code>"
+        try:
+            await retry_on_flood(docs.copy)(Vars.LOG_CHANNEL, caption=log_caption)
+        except Exception:
+            pass
 
-  try:
-    await retry_on_flood(docs.copy)(Vars.LOG_CHANNEL, caption=caption)
-  except:
-    pass
-
-  try:
-    await retry_on_flood(Bot.send_sticker)(
-        chat_id=Vars.LOG_CHANNEL,
-        sticker=
-        "CAACAgUAAxkBAAEEMvlnk2WQb9YDDw3FrFRy-xvZGwjgPQACAQMAAhfwPD-tj1bRx4epxR4E"
-    )
-  except:
-    pass
-
-  if thumb_path and os.path.exists(thumb_path):
-    try: os.remove(thumb_path)
-    except: pass
-
-  if os.path.exists(dl_location):
-    os.remove(dl_location)
+    # ZERO-DISK POLICY: Immediate Deletion from Render Server
+    if os.path.exists(dl_location):
+        try: os.remove(dl_location)
+        except: pass
