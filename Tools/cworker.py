@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 
 logger = get_logger(__name__)
 
-# Track if the background engine is running to prevent duplicates
 _delete_engine_running = False
 
 def get_random_folder_name(base_folder: str = "Downloads"):
@@ -23,7 +22,6 @@ def get_random_folder_name(base_folder: str = "Downloads"):
 # BACKGROUND TASK: 6-HOUR AUTO-DELETE
 # ==========================================
 async def auto_delete_engine():
-    """Continuously checks the database for messages older than 6 hours and deletes them."""
     global _delete_engine_running
     if _delete_engine_running:
         return
@@ -47,10 +45,9 @@ async def auto_delete_engine():
         except Exception as e:
             logger.error(f"Auto-Delete Engine Error: {e}")
             
-        await asyncio.sleep(60)  # Check every 60 seconds
+        await asyncio.sleep(60)
 
 async def episode_worker(worker_id):
-    # Boot up the Auto-Delete engine on the first worker
     if worker_id == 0:
         asyncio.create_task(auto_delete_engine())
         
@@ -92,7 +89,6 @@ async def episode_download_processer(download_, user_id, task_id):
 
     try:
         quality_ = get_quality_num(download_.quality) or "High-Speed"
-        # 100% Branded Name
         file_name = f"✲『SCANIME』✲ {clean_name(download_.anime_title)} - {download_.title} [{quality_}].mp4"
         
         if sts:
@@ -126,7 +122,6 @@ async def episode_download_processer(download_, user_id, task_id):
         if sts:
             await igrone_error(sts.edit_text)(f"<code>System Error: {err}</code>")
     finally:
-        # STRICT ZERO-DISK POLICY
         if 'yt' in locals():
             await yt.clean_folder()
         if 'file_path' in locals():
@@ -136,7 +131,6 @@ async def episode_download_processer(download_, user_id, task_id):
                     try: os.remove(p)
                     except: pass
         
-        # Ensure the status message is tracked for deletion too
         if sts:
             await retry_on_flood(sts.edit_text)("<code>Task completed.</code>")
             await track_message(sts.chat.id, sts.id)
@@ -144,12 +138,10 @@ async def episode_download_processer(download_, user_id, task_id):
 async def send_media(dl_location, new_filename, user_id, sts, link=None):
     user_id = str(user_id)
     
-    # 100% Branded, Minimalist Caption (No credits)
-    caption = f"<blockquote><b>✲『SCANIME』✲ DIRECT DELIVERY</b></blockquote>\n\n<b>File:</b> <code>{new_filename}</code>\n<b>Status:</b> <i>File will self-destruct in 6 hours to protect the server.</i>"
+    caption = f"<blockquote><b>✲『SCANIME』✲ DIRECT DELIVERY</b></blockquote>\n\n<b>File:</b> <code>{new_filename}</code>\n<b>Status:</b> <i>File will self-destruct from the bot chat in 6 hours to protect the server.</i>"
     
     docs = None
     try:
-        # We enforce Video streaming as the default premium experience
         docs = await retry_on_flood(Bot.send_video)(
             chat_id=int(user_id),
             video=dl_location,
@@ -174,10 +166,19 @@ async def send_media(dl_location, new_filename, user_id, sts, link=None):
             logger.error(f"Fallback upload failed: {fallback_e}")
 
     if docs:
-        # Track the video message for the 6-Hour Auto-Delete Engine
+        # Track the video message in the user's bot chat for the 6-Hour Auto-Delete Engine
         await track_message(docs.chat.id, docs.id)
 
-    # Simplified Logging
+        # RESTORED: Personal Dump Channel Forwarder
+        # If the user has a dump channel set, the bot copies the file there. 
+        # The auto-delete engine WILL NOT delete the copy in their private dump!
+        dump_channel = uts.get(user_id, {}).get('setting', {}).get('dump')
+        if dump_channel:
+            try: 
+                await retry_on_flood(docs.copy)(int(dump_channel))
+            except Exception as e: 
+                logger.warning(f"Failed to forward to user dump channel: {e}")
+
     if Vars.LOG_CHANNEL != 0:
         log_caption = f"<blockquote><b>✲『SCANIME』✲ DELIVERY LOG</b></blockquote>\n\n<b>User:</b> <code>{user_id}</code>\n<b>File:</b> <code>{new_filename}</code>"
         try:
@@ -185,7 +186,6 @@ async def send_media(dl_location, new_filename, user_id, sts, link=None):
         except Exception:
             pass
 
-    # ZERO-DISK POLICY: Immediate Deletion from Render Server
     if os.path.exists(dl_location):
         try: os.remove(dl_location)
         except: pass
