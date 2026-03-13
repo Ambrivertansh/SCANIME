@@ -1,21 +1,19 @@
 from asyncio import timeout
 from pyrogram import filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
 from .storage import retry_on_flood, igrone_error
 from bot import Bot, Vars, logger
 from Tools.db import uts, update_setting, ensure_user
-import random
 
-users_txt = """<b>Welcome to the User Panel ! </b>
+users_txt = """<blockquote><b>✲『SCANIME』✲ ENGINE | SETTINGS</b></blockquote>
 
 <b>=> Your User ID: <code>{id}</code></b>
 <b>=> File Name: <code>{file_name}</code><code>[{len}]</code></b>
 <b>=> Caption: <code>{caption}</code></b>
-<b>=> Thumbnail: <code>{thumb}</code></b>
+<b>=> Custom Thumbnail: <code>{thumb}</code></b>
 <b>=> Output Mode: <code>{type}</code></b>
 <b>=> Dump Channel: <code>{dump}</code></b>"""
-
 
 async def get_user_txt(user_id):
   user_id = str(user_id)
@@ -28,7 +26,7 @@ async def get_user_txt(user_id):
     id=user_id,
     file_name=uts[user_id]['setting'].get("file_name", "None"),
     caption=uts[user_id]['setting'].get("caption", "None"),
-    thumb="True" if thumbnali else "None",
+    thumb="Saved" if thumbnali else "None",
     dump=uts[user_id]['setting'].get("dump", "None"),
     type=mode,
     megre=uts[user_id]['setting'].get("megre", "None"),
@@ -36,7 +34,6 @@ async def get_user_txt(user_id):
     len=uts[user_id]['setting'].get("f_n_l", "None"),
   )
   return txt, thumbnali
-
 
 @Bot.on_message(filters.command("info") & filters.user(Vars.ADMINS))
 async def info_handler(_, message):
@@ -48,39 +45,26 @@ async def info_handler(_, message):
   
   sts = await retry_on_flood(message.reply)("<code>Processing...</code>", quote=True)
   await ensure_user(user_id)
-  txt, thumbnali = await get_user_txt(user_id)
+  txt, _ = await get_user_txt(user_id)
   
-  if not thumbnali:
-    thumbnali = random.choice(Vars.PICS)
-  try:
-    await retry_on_flood(sts.edit_media)(
-      InputMediaPhoto(thumbnali, caption=txt),
-      reply_markup=InlineKeyboardMarkup([
-        [
-          InlineKeyboardButton(" ▏𝗖𝗟𝗢𝗦𝗘▕ ", callback_data="qclose")
-        ]
-      ])
-    )
-  except:
-    await retry_on_flood(sts.edit_media)(
-      InputMediaPhoto(Vars.PICS[-2], caption=txt),
-      reply_markup=InlineKeyboardMarkup([
-        [
-          InlineKeyboardButton(" ▏𝗖𝗟𝗢𝗦𝗘▕ ", callback_data="qclose")
-        ]
-      ])
-    )
-
+  await retry_on_flood(sts.edit_text)(
+    text=txt,
+    reply_markup=InlineKeyboardMarkup([
+      [
+        InlineKeyboardButton(" ▏𝗖𝗟𝗢𝗦𝗘▕ ", callback_data="qclose")
+      ]
+    ])
+  )
 
 @Bot.on_message(filters.command(["us", "user_setting", "user_panel"]))
 async def userxsettings(client, message):
   if Vars.IS_PRIVATE:
     if message.chat.id not in Vars.ADMINS:
-      return await message.reply("<code>You cannot use me baby </code>")
+      return await message.reply("<code>Access Denied.</code>")
 
   sts = await message.reply("<code>Processing...</code>")
   try:
-    txt, thumbnali = await get_user_txt(message.from_user.id)
+    txt, _ = await get_user_txt(message.from_user.id)
 
     button = [
       [
@@ -100,35 +84,20 @@ async def userxsettings(client, message):
       ]
     ]
     
-    if not thumbnali:
-      thumbnali = random.choice(Vars.PICS)
-    try:
-      await retry_on_flood(message.reply_photo)(
-        thumbnali,
-        caption=txt,
-        reply_markup=InlineKeyboardMarkup(button),
-        quote=True,
-      )
-    except:
-      await retry_on_flood(message.reply_photo)(
-        Vars.PICS[0],
-        caption=txt,
-        reply_markup=InlineKeyboardMarkup(button),
-        quote=True
-      )
-
+    await retry_on_flood(message.reply_text)(
+      text=txt,
+      reply_markup=InlineKeyboardMarkup(button),
+      quote=True,
+    )
     await sts.delete()
   except Exception as err:
     logger.exception(err)
-    await sts.edit(err)
-
-
-
+    await sts.edit(str(err))
 
 @Bot.on_callback_query(filters.regex("^main_settings$"))
 async def main_settings_handler(client, query):
   try:
-    txt, thumbnali = await get_user_txt(query.from_user.id)
+    txt, _ = await get_user_txt(query.from_user.id)
 
     button = [
       [
@@ -147,19 +116,11 @@ async def main_settings_handler(client, query):
         InlineKeyboardButton("▏𝗖𝗟𝗢𝗦𝗘▕", callback_data="qclose")
       ]
     ]
-    if not thumbnali:
-      thumbnali = random.choice(Vars.PICS)
     
-    try:
-      await retry_on_flood(query.edit_message_media)(
-        InputMediaPhoto(thumbnali, caption=txt),
-        reply_markup=InlineKeyboardMarkup(button)
-      )
-    except:
-      await retry_on_flood(query.edit_message_media)(
-        InputMediaPhoto(Vars.PICS[-1], caption=txt),
-        reply_markup=InlineKeyboardMarkup(button)
-      )
+    await retry_on_flood(query.edit_message_text)(
+      text=txt,
+      reply_markup=InlineKeyboardMarkup(button)
+    )
 
   except Exception as err:
     logger.exception(err)
@@ -167,11 +128,9 @@ async def main_settings_handler(client, query):
       f"```{err}```"
     )
 
-
 @Bot.on_callback_query(filters.regex("^show_"))
-async def  show_settings_handler(_, query):
-  type_data =  query.data.removeprefix("show_")
-  #txt, thumbnail = get_user_txt(query.from_user.id)
+async def show_settings_handler(_, query):
+  type_data = query.data.removeprefix("show_")
   button = [
     [
       InlineKeyboardButton("⌜sᴇᴛ/ᴄʜᴀɴɢᴇ⌟", callback_data=f"ufn_{type_data}"),
@@ -187,11 +146,9 @@ async def  show_settings_handler(_, query):
   button.append([InlineKeyboardButton("⇦ 𝗕𝗔𝗖𝗞", callback_data="main_settings")])
   await retry_on_flood(query.edit_message_reply_markup)(InlineKeyboardMarkup(button))
   
-
-
 @Bot.on_callback_query(filters.regex("^del_"))
 async def del_settings_handler(_, query):
-  type_data =  query.data.removeprefix("del_")
+  type_data = query.data.removeprefix("del_")
   
   user_id = str(query.from_user.id)
   reply_markup = query.message.reply_markup
@@ -200,29 +157,19 @@ async def del_settings_handler(_, query):
   if uts[user_id]['setting'].get(type_data, None):
     await update_setting(user_id, type_data, None)
     
-    txt, thumbnail = await get_user_txt(query.from_user.id)
+    txt, _ = await get_user_txt(query.from_user.id)
     await igrone_error(query.answer)(" Deleted Successfully ")
-    if not thumbnail:
-      thumbnail = random.choice(Vars.PICS)
     
-    try:
-      await retry_on_flood(query.edit_message_media)(
-        InputMediaPhoto(thumbnail, caption=txt),
-        reply_markup=reply_markup,
-      )
-    except:
-      await retry_on_flood(query.edit_message_media)(
-        InputMediaPhoto(Vars.PICS[-1], caption=txt),
-        reply_markup=reply_markup,
-      )
+    await retry_on_flood(query.edit_message_text)(
+      text=txt,
+      reply_markup=reply_markup,
+    )
   else:
     await igrone_error(query.answer)(" Already Deleted ")
 
-
-
 @Bot.on_callback_query(filters.regex("^ufn_"))
 async def ufn_settings_handler(client, query):
-  type_data =  query.data.removeprefix("ufn_")
+  type_data = query.data.removeprefix("ufn_")
   
   user_id = str(query.from_user.id)
   reply_markup = query.message.reply_markup
@@ -233,20 +180,19 @@ async def ufn_settings_handler(client, query):
     caption += "\n\n<b><i>Example:-</i></b>\n<code>{name} - {ep} - {type} - {res}.mp4</code>"
   elif type_data == "caption":
     caption += "<b><code>{name}</code>: Anime Name\n<code>{ep}</code>: Anime Episode\n<code>{type}</code>: (SUB or DUB)\n<code>{res}</code>: Anime Resolution(480p, 720p, 1080p)\n<code>{}</code>: File Name\n\n/cancel : To Cancel Process</b>"
-    caption += "\n\n<b><i>Note:- We will Accpet Html Format like Blod, Italic, etc </i></b>"
+    caption += "\n\n<b><i>Note:- We will Accept Html Format like Bold, Italic, etc </i></b>"
   elif type_data == "thumb":
     caption += "<b><i>Send Thumbnail Photo\n\n/cancel : To Cancel Process</i></b>"
   elif type_data == "dump":
-    caption += "<b><i>Send Dump Channel ID or Foward Message from Channel \n\n/cancel : To Cancel Process</i></b>"
+    caption += "<b><i>Send Dump Channel ID or Forward Message from Channel \n\n/cancel : To Cancel Process</i></b>"
   elif type_data == "regex":
-    caption += "<b><i>Send Regex(Zfill) Number like 1,2,3,etc</i></b>\n\n<code>This Will Add Zero Infornt of Number, If you set 1, then it will set 0 infornt of 1-9 to 01-09 , if you set 2 then it will set 0 infornt of 1-99 to 01-99 and viceversa </code>\n\n/cancel : To Cancel Process</i></b>"
+    caption += "<b><i>Send Regex(Zfill) Number like 1,2,3,etc</i></b>\n\n<code>This Will Add Zero In front of Number</code>\n\n/cancel : To Cancel Process</i></b>"
   else:
-    caption += "<b><i>Send File Name Length Number like 1,2,3,etc</i></b>\n\n<code>This Will Cut File Name Length, If you set 1, then it will cut file name length to 1, if you set 2 then it will cut file name length to 2 and viceversa</code> \n\n/cancel : To Cancel Process</i></b>"
+    caption += "<b><i>Send File Name Length Number like 1,2,3,etc</i></b>\n\n<code>This Will Cut File Name Length</code> \n\n/cancel : To Cancel Process</i></b>"
   
   await igrone_error(query.answer)()
-  await retry_on_flood(query.edit_message_media)(
-    InputMediaPhoto(random.choice(Vars.PICS), caption=caption)
-  )
+  await retry_on_flood(query.edit_message_text)(text=caption)
+  
   results_error = None
   try:
     call_ = await client.listen(
@@ -264,7 +210,7 @@ async def ufn_settings_handler(client, query):
         results_error = True
         
     elif type_data == "dump":
-      if call_.text.startswith("-100"):
+      if call_.text and call_.text.startswith("-100"):
         try: 
            results_value = int(call_.text)
         except:
@@ -306,22 +252,11 @@ async def ufn_settings_handler(client, query):
       f"<b>Error Occured: {err}</b>"
     )
   finally:
-    txt , thumbnail = await get_user_txt(query.from_user.id)
-    if not thumbnail:
-      thumbnail = random.choice(Vars.PICS)
-    try:
-      return await retry_on_flood(query.edit_message_media)(
-         InputMediaPhoto(thumbnail, caption=txt),
-         reply_markup=reply_markup,
-      )
-    except:
-      return await retry_on_flood(query.edit_message_media)(
-         InputMediaPhoto(Vars.PICS[-1], caption=txt),
-         reply_markup=reply_markup,
-      )
-    
-
-
+    txt, _ = await get_user_txt(query.from_user.id)
+    return await retry_on_flood(query.message.edit_text)(
+       text=txt,
+       reply_markup=reply_markup,
+    )
 
 @Bot.on_callback_query(filters.regex("^rts_"))
 async def rts_settings_handler(_, query):
@@ -345,16 +280,9 @@ async def rts_settings_handler(_, query):
     ]
   ])
   await igrone_error(query.answer)()
-  txt, thumbnail = await get_user_txt(query.from_user.id)
-  if not thumbnail:
-    thumbnail = random.choice(Vars.PICS)
-  try:
-    await retry_on_flood(query.edit_message_media)(
-        InputMediaPhoto(thumbnail, caption=txt),
-        reply_markup=reply_markup,
-    )
-  except:
-    await retry_on_flood(query.edit_message_media)(
-      InputMediaPhoto(Vars.PICS[1], caption=txt),
+  txt, _ = await get_user_txt(query.from_user.id)
+  
+  await retry_on_flood(query.edit_message_text)(
+      text=txt,
       reply_markup=reply_markup,
-    )
+  )
