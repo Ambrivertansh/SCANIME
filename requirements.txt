@@ -1,0 +1,14 @@
+pyrofork==2.3.59
+tgcrypto-pyrofork
+cloudscraper
+pymongo[srv]==3.12
+beautifulsoup4
+pillow
+yt-dlp[curl-cffi,default]
+psutil
+ffprobe
+aiohttp
+aioitertools
+aiofiles
+pycryptodome
+playwright
