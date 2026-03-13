@@ -25,4 +25,4 @@ RUN playwright install-deps chromium
 
 COPY . /app
 
-CMD ["bash", "start.sh"]
+CMD ["python3", "main.py"]
